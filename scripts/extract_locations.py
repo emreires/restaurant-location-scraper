@@ -39,6 +39,7 @@ STATE_ABBR = {
     "VIRGINIA": "VA", "WASHINGTON": "WA", "WEST VIRGINIA": "WV", "WISCONSIN": "WI", "WYOMING": "WY",
     "DISTRICT OF COLUMBIA": "DC",
 }
+US_STATES = set(STATE_ABBR.values())
 
 
 def build_session() -> requests.Session:
@@ -130,6 +131,10 @@ def build_full_address(street_1: str, street_2: str, city: str, state: str, post
     return ", ".join(part for part in [line_1, line_2] if part)
 
 
+def normalize_for_dedupe(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", clean_text(value).lower())
+
+
 def map_record_to_required_fields(record: dict[str, Any]) -> dict[str, str]:
     acf = record.get("acf") if isinstance(record.get("acf"), dict) else {}
     hero = acf.get("locationHero") if isinstance(acf.get("locationHero"), dict) else {}
@@ -168,6 +173,34 @@ def map_records(records: list[dict[str, Any]]) -> list[dict[str, str]]:
     return [map_record_to_required_fields(record) for record in records]
 
 
+def filter_us_locations(records: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [record for record in records if record.get("state", "") in US_STATES]
+
+
+def dedupe_locations(records: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen_store_ids: set[str] = set()
+    seen_addresses: set[str] = set()
+    deduped: list[dict[str, str]] = []
+
+    for record in records:
+        store_id = clean_text(record.get("storeID"))
+        address_key = normalize_for_dedupe(record.get("fullAddress", ""))
+
+        if store_id and store_id in seen_store_ids:
+            continue
+        if address_key and address_key in seen_addresses:
+            continue
+
+        deduped.append(record)
+
+        if store_id:
+            seen_store_ids.add(store_id)
+        if address_key:
+            seen_addresses.add(address_key)
+
+    return deduped
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
@@ -184,11 +217,16 @@ def main() -> None:
     records = fetch_locations(args.endpoint, args.per_page, args.timeout)
     raw_path = write_raw_records(records, args.raw_json)
     mapped_records = map_records(records)
+    us_records = filter_us_locations(mapped_records)
+    deduped_records = dedupe_locations(us_records)
+
     print(
         json.dumps(
             {
                 "records_fetched": len(records),
                 "mapped_records": len(mapped_records),
+                "us_records": len(us_records),
+                "deduped_records": len(deduped_records),
                 "raw_json": str(raw_path),
             },
             indent=2,
