@@ -83,10 +83,13 @@ def fetch_locations(endpoint: str, per_page: int, timeout: int) -> list[dict[str
             break
 
         if response.status_code == 403:
-            raise RuntimeError(
-                "Endpoint returned 403. Use --input-json with a locally saved payload "
-                "or retry from a network that allows direct API access."
-            )
+            # Some networks block parameterized API calls; retry base endpoint once.
+            fallback = session.get(endpoint, timeout=timeout)
+            fallback.raise_for_status()
+            fallback_records = fallback.json()
+            if not isinstance(fallback_records, list):
+                raise ValueError("Unexpected fallback API payload; expected a JSON array.")
+            return fallback_records
 
         response.raise_for_status()
         page_records = response.json()
