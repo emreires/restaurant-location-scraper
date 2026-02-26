@@ -53,7 +53,67 @@ def create_scatter_plot(metrics: pd.DataFrame, plot_path: str) -> Path:
     return output_path
 
 
-def build_slide(title: str, plot_path: str, output_pptx: str) -> Path:
+def format_location_label(row: pd.Series) -> str:
+    name = str(row.get("locationName", "Unknown")).strip()
+    city = str(row.get("city", "")).strip()
+    state = str(row.get("state", "")).strip()
+    if city and state:
+        return f"{name} ({city}, {state})"
+    if city:
+        return f"{name} ({city})"
+    if state:
+        return f"{name} ({state})"
+    return name
+
+
+def generate_insight_bullets(metrics: pd.DataFrame, enriched: pd.DataFrame) -> list[str]:
+    if metrics.empty:
+        return ["No matched location metrics were available for automated insights."]
+
+    metrics_copy = metrics.copy()
+    metrics_copy["review_count"] = pd.to_numeric(metrics_copy["review_count"], errors="coerce")
+    metrics_copy["avg_rating"] = pd.to_numeric(metrics_copy["avg_rating"], errors="coerce")
+    metrics_copy = metrics_copy.dropna(subset=["review_count", "avg_rating"])
+
+    if metrics_copy.empty:
+        return ["Metrics file did not contain numeric values for volume/rating analysis."]
+
+    threshold = max(int(metrics_copy["review_count"].median()), 50)
+    stable_subset = metrics_copy.loc[metrics_copy["review_count"] >= threshold]
+    if stable_subset.empty:
+        stable_subset = metrics_copy.copy()
+
+    top_rated = stable_subset.sort_values(by=["avg_rating", "review_count"], ascending=[False, False]).iloc[0]
+    bottom_rated = stable_subset.sort_values(by=["avg_rating", "review_count"], ascending=[True, False]).iloc[0]
+    highest_volume = metrics_copy.sort_values(by=["review_count", "avg_rating"], ascending=[False, False]).iloc[0]
+
+    matched_mask = enriched.get("matched_storeID", pd.Series(dtype=str)).fillna("") != ""
+    matched_count = int(matched_mask.sum())
+    total_count = int(len(enriched))
+    coverage = (matched_count / total_count * 100) if total_count else 0.0
+
+    rating_spread = float(stable_subset["avg_rating"].max() - stable_subset["avg_rating"].min())
+
+    bullets = [
+        (
+            f"Top rated location (>= {threshold} reviews): {format_location_label(top_rated)} "
+            f"with avg rating {float(top_rated['avg_rating']):.2f} across {int(top_rated['review_count'])} reviews."
+        ),
+        (
+            f"Lowest rated location (>= {threshold} reviews): {format_location_label(bottom_rated)} "
+            f"at {float(bottom_rated['avg_rating']):.2f}; indicates service quality variance."
+        ),
+        (
+            f"Highest volume location: {format_location_label(highest_volume)} with "
+            f"{int(highest_volume['review_count'])} reviews and avg rating {float(highest_volume['avg_rating']):.2f}."
+        ),
+        f"Review-to-location match coverage is {coverage:.1f}% ({matched_count}/{total_count}).",
+        f"Rating spread across stable locations is {rating_spread:.2f} points, useful for geo-prioritized deep dives.",
+    ]
+    return bullets
+
+
+def build_slide(title: str, plot_path: str, output_pptx: str, bullets: list[str]) -> Path:
     output_path = Path(output_pptx)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -78,15 +138,11 @@ def build_slide(title: str, plot_path: str, output_pptx: str) -> Path:
     p0.font.size = Pt(20)
     p0.font.bold = True
 
-    for bullet in [
-        "Scatter plot compares location volume and average rating.",
-        "Use this slide as the discussion starting point for deeper review analysis.",
-        "Automated insight bullets will be populated in the next iteration.",
-    ]:
+    for bullet in bullets:
         p = insights_tf.add_paragraph()
         p.text = bullet
         p.level = 0
-        p.font.size = Pt(14)
+        p.font.size = Pt(12)
 
     presentation.save(output_path)
     return output_path
@@ -95,10 +151,11 @@ def build_slide(title: str, plot_path: str, output_pptx: str) -> Path:
 def main() -> None:
     args = parse_args()
     metrics = pd.read_csv(args.metrics_csv)
-    _enriched = pd.read_csv(args.enriched_csv)
+    enriched = pd.read_csv(args.enriched_csv)
 
     plot_path = create_scatter_plot(metrics, args.plot_path)
-    pptx_path = build_slide(args.title, str(plot_path), args.output_pptx)
+    bullets = generate_insight_bullets(metrics, enriched)
+    pptx_path = build_slide(args.title, str(plot_path), args.output_pptx, bullets)
 
     print(f"Created slide: {pptx_path}")
 
