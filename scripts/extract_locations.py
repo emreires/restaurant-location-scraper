@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -66,6 +67,14 @@ def fetch_locations(endpoint: str, per_page: int, timeout: int) -> list[dict[str
     return all_records
 
 
+def write_raw_records(records: list[dict[str, Any]], raw_json_path: str) -> Path:
+    path = Path(raw_json_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(records, handle, ensure_ascii=False, indent=2)
+    return path
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
@@ -80,7 +89,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     records = fetch_locations(args.endpoint, args.per_page, args.timeout)
-    print(json.dumps({"records_fetched": len(records)}, indent=2))
+    raw_path = write_raw_records(records, args.raw_json)
+    print(json.dumps({"records_fetched": len(records), "raw_json": str(raw_path)}, indent=2))
 
 
 if __name__ == "__main__":
