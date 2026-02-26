@@ -248,6 +248,57 @@ def build_enriched_reviews(matched_reviews: pd.DataFrame, locations: pd.DataFram
     return enriched
 
 
+def compute_location_metrics(enriched_reviews: pd.DataFrame) -> pd.DataFrame:
+    matched = enriched_reviews.loc[enriched_reviews["matched_storeID"] != ""].copy()
+
+    if matched.empty:
+        return pd.DataFrame(
+            columns=[
+                "storeID",
+                "locationName",
+                "city",
+                "state",
+                "review_count",
+                "avg_rating",
+                "pct_1_2",
+                "pct_5",
+                "earliest_review_date",
+                "latest_review_date",
+            ]
+        )
+
+    grouped = matched.groupby(
+        ["matched_storeID", "matched_locationName", "matched_city", "matched_state"],
+        dropna=False,
+    )
+
+    metrics = grouped.agg(
+        review_count=("reviewRating", "count"),
+        avg_rating=("reviewRating", "mean"),
+        pct_1_2=("reviewRating", lambda s: (s.isin([1, 2]).sum() / len(s)) * 100 if len(s) else 0),
+        pct_5=("reviewRating", lambda s: ((s == 5).sum() / len(s)) * 100 if len(s) else 0),
+        earliest_review_date=("reviewDateParsed", "min"),
+        latest_review_date=("reviewDateParsed", "max"),
+    ).reset_index()
+
+    metrics = metrics.rename(
+        columns={
+            "matched_storeID": "storeID",
+            "matched_locationName": "locationName",
+            "matched_city": "city",
+            "matched_state": "state",
+        }
+    )
+
+    metrics["avg_rating"] = metrics["avg_rating"].round(3)
+    metrics["pct_1_2"] = metrics["pct_1_2"].round(2)
+    metrics["pct_5"] = metrics["pct_5"].round(2)
+    metrics["earliest_review_date"] = metrics["earliest_review_date"].astype(str)
+    metrics["latest_review_date"] = metrics["latest_review_date"].astype(str)
+
+    return metrics.sort_values(by=["review_count", "avg_rating"], ascending=[False, False])
+
+
 def write_csv(frame: pd.DataFrame, path: str) -> Path:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -277,7 +328,10 @@ def main() -> None:
     slug_index, address_index, phone_index, _enriched_locations = build_match_indexes(locations, lookup)
     matched_reviews = match_reviews(lamadeleine_reviews, slug_index, address_index, phone_index)
     enriched_reviews = build_enriched_reviews(matched_reviews, locations)
-    output_path = write_csv(enriched_reviews, args.output_enriched)
+    metrics = compute_location_metrics(enriched_reviews)
+
+    enriched_path = write_csv(enriched_reviews, args.output_enriched)
+    metrics_path = write_csv(metrics, args.output_metrics)
 
     summary = {
         "reviews_loaded": int(len(reviews)),
@@ -285,7 +339,8 @@ def main() -> None:
         "locations_loaded": int(len(locations)),
         "matched_reviews": int((matched_reviews["matched_storeID"] != "").sum()),
         "unmatched_reviews": int((matched_reviews["matched_storeID"] == "").sum()),
-        "output_enriched": str(output_path),
+        "output_enriched": str(enriched_path),
+        "output_metrics": str(metrics_path),
     }
     print(json.dumps(summary, indent=2))
 
