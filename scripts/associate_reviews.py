@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from pathlib import Path
+from collections import defaultdict
 from typing import Any
 
 import pandas as pd
@@ -39,6 +39,21 @@ def normalize_phone(value: Any) -> str:
     return re.sub(r"[^0-9]+", "", clean_text(value))
 
 
+def normalize_store_id(value: Any) -> str:
+    raw = clean_text(value)
+    if not raw:
+        return ""
+    try:
+        return str(int(float(raw)))
+    except ValueError:
+        return raw
+
+
+def extract_slug_from_website(website: str) -> str:
+    match = re.search(r"/locations/([^/?#]+)", clean_text(website).lower())
+    return clean_text(match.group(1)) if match else ""
+
+
 def is_lamadeleine_review(website: str, name: str) -> bool:
     website_clean = clean_text(website).lower()
     name_clean = clean_text(name).lower()
@@ -59,6 +74,7 @@ def load_reviews(path: str) -> pd.DataFrame:
     reviews["name_norm"] = reviews.get("name", "").fillna("").map(clean_text)
     reviews["fullAddress_norm"] = reviews.get("fullAddress", "").fillna("").map(normalize_text)
     reviews["phone_norm"] = reviews.get("phone", "").fillna("").map(normalize_phone)
+    reviews["location_slug"] = reviews.get("website", "").fillna("").map(extract_slug_from_website)
 
     reviews["is_lamadeleine"] = reviews.apply(
         lambda row: is_lamadeleine_review(row.get("website", ""), row.get("name", "")),
@@ -79,9 +95,122 @@ def load_locations(path: str) -> pd.DataFrame:
         raise ValueError(f"Locations file is missing required columns: {missing}")
 
     locations = locations[LOCATION_COLUMNS].copy()
+    locations["storeID"] = locations["storeID"].map(normalize_store_id)
     locations["fullAddress_norm"] = locations["fullAddress"].map(normalize_text)
 
     return locations
+
+
+def load_location_lookup(raw_json_path: str) -> pd.DataFrame:
+    try:
+        with open(raw_json_path, "r", encoding="utf-8") as handle:
+            records = json.load(handle)
+    except FileNotFoundError:
+        return pd.DataFrame(columns=["storeID", "slug", "phone_norm", "rawAddress_norm"])
+
+    output: list[dict[str, str]] = []
+    for record in records:
+        acf = record.get("acf") if isinstance(record.get("acf"), dict) else {}
+        hero = acf.get("locationHero") if isinstance(acf.get("locationHero"), dict) else {}
+
+        store_id = normalize_store_id(hero.get("id") or record.get("id"))
+        slug = clean_text(record.get("slug", "")).lower()
+
+        address_1 = clean_text(hero.get("addressLine1"))
+        address_2 = clean_text(hero.get("addressLine2"))
+        city = clean_text(hero.get("city"))
+        state = clean_text(hero.get("state"))
+        postal_code = clean_text(hero.get("zip"))
+        full_address = ", ".join(
+            value for value in [", ".join(v for v in [address_1, address_2] if v), f"{city}, {state} {postal_code}".strip()] if value
+        )
+
+        output.append(
+            {
+                "storeID": store_id,
+                "slug": slug,
+                "phone_norm": normalize_phone(hero.get("phone")),
+                "rawAddress_norm": normalize_text(full_address),
+            }
+        )
+
+    return pd.DataFrame(output).drop_duplicates(subset=["storeID"])
+
+
+def choose_stable_id(store_ids: list[str]) -> str:
+    return sorted(store_ids, key=lambda value: (len(value), value))[0]
+
+
+def build_match_indexes(locations: pd.DataFrame, lookup: pd.DataFrame) -> tuple[dict[str, str], dict[str, str], dict[str, str], pd.DataFrame]:
+    enriched = locations.merge(lookup, on="storeID", how="left")
+
+    slug_index_lists: dict[str, list[str]] = defaultdict(list)
+    address_index_lists: dict[str, list[str]] = defaultdict(list)
+    phone_index_lists: dict[str, list[str]] = defaultdict(list)
+
+    for row in enriched.itertuples(index=False):
+        store_id = clean_text(row.storeID)
+        slug = clean_text(getattr(row, "slug", ""))
+        address_norm = clean_text(row.fullAddress_norm)
+        phone_norm = clean_text(getattr(row, "phone_norm", ""))
+
+        if slug:
+            slug_index_lists[slug].append(store_id)
+        if address_norm:
+            address_index_lists[address_norm].append(store_id)
+        if phone_norm:
+            phone_index_lists[phone_norm].append(store_id)
+
+    slug_index = {key: choose_stable_id(values) for key, values in slug_index_lists.items()}
+    address_index = {key: choose_stable_id(values) for key, values in address_index_lists.items()}
+    phone_index = {key: choose_stable_id(values) for key, values in phone_index_lists.items()}
+
+    return slug_index, address_index, phone_index, enriched
+
+
+def match_reviews(
+    reviews: pd.DataFrame,
+    slug_index: dict[str, str],
+    address_index: dict[str, str],
+    phone_index: dict[str, str],
+) -> pd.DataFrame:
+    output = reviews.copy()
+
+    matched_store_ids: list[str] = []
+    methods: list[str] = []
+    confidences: list[float] = []
+
+    for row in output.itertuples(index=False):
+        matched_store_id = ""
+        match_method = "unmatched"
+        confidence = 0.0
+
+        slug = clean_text(getattr(row, "location_slug", "")).lower()
+        if slug and slug in slug_index:
+            matched_store_id = slug_index[slug]
+            match_method = "website_slug"
+            confidence = 1.0
+        else:
+            address_key = clean_text(getattr(row, "fullAddress_norm", ""))
+            if address_key and address_key in address_index:
+                matched_store_id = address_index[address_key]
+                match_method = "address"
+                confidence = 0.9
+            else:
+                phone_key = clean_text(getattr(row, "phone_norm", ""))
+                if phone_key and phone_key in phone_index:
+                    matched_store_id = phone_index[phone_key]
+                    match_method = "phone"
+                    confidence = 0.8
+
+        matched_store_ids.append(matched_store_id)
+        methods.append(match_method)
+        confidences.append(confidence)
+
+    output["matched_storeID"] = matched_store_ids
+    output["match_method"] = methods
+    output["match_confidence"] = confidences
+    return output
 
 
 def parse_args() -> argparse.Namespace:
@@ -101,13 +230,17 @@ def main() -> None:
     reviews = load_reviews(args.reviews_csv)
     lamadeleine_reviews = filter_lamadeleine_reviews(reviews)
     locations = load_locations(args.locations_csv)
+    lookup = load_location_lookup(args.raw_json)
+
+    slug_index, address_index, phone_index, _enriched_locations = build_match_indexes(locations, lookup)
+    matched_reviews = match_reviews(lamadeleine_reviews, slug_index, address_index, phone_index)
 
     summary = {
         "reviews_loaded": int(len(reviews)),
         "lamadeleine_reviews": int(len(lamadeleine_reviews)),
         "locations_loaded": int(len(locations)),
-        "review_date_min": str(lamadeleine_reviews["reviewDateParsed"].min()),
-        "review_date_max": str(lamadeleine_reviews["reviewDateParsed"].max()),
+        "matched_reviews": int((matched_reviews["matched_storeID"] != "").sum()),
+        "unmatched_reviews": int((matched_reviews["matched_storeID"] == "").sum()),
     }
     print(json.dumps(summary, indent=2))
 
