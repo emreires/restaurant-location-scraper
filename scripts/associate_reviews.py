@@ -39,6 +39,14 @@ def normalize_phone(value: Any) -> str:
     return re.sub(r"[^0-9]+", "", clean_text(value))
 
 
+def is_lamadeleine_review(website: str, name: str) -> bool:
+    website_clean = clean_text(website).lower()
+    name_clean = clean_text(name).lower()
+    if "lamadeleine.com/locations/" in website_clean:
+        return True
+    return "la madeleine" in name_clean
+
+
 def load_reviews(path: str) -> pd.DataFrame:
     reviews = pd.read_csv(path, dtype=str)
 
@@ -52,7 +60,15 @@ def load_reviews(path: str) -> pd.DataFrame:
     reviews["fullAddress_norm"] = reviews.get("fullAddress", "").fillna("").map(normalize_text)
     reviews["phone_norm"] = reviews.get("phone", "").fillna("").map(normalize_phone)
 
+    reviews["is_lamadeleine"] = reviews.apply(
+        lambda row: is_lamadeleine_review(row.get("website", ""), row.get("name", "")),
+        axis=1,
+    )
     return reviews
+
+
+def filter_lamadeleine_reviews(reviews: pd.DataFrame) -> pd.DataFrame:
+    return reviews.loc[reviews["is_lamadeleine"]].copy()
 
 
 def load_locations(path: str) -> pd.DataFrame:
@@ -83,13 +99,15 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     reviews = load_reviews(args.reviews_csv)
+    lamadeleine_reviews = filter_lamadeleine_reviews(reviews)
     locations = load_locations(args.locations_csv)
 
     summary = {
         "reviews_loaded": int(len(reviews)),
+        "lamadeleine_reviews": int(len(lamadeleine_reviews)),
         "locations_loaded": int(len(locations)),
-        "review_date_min": str(reviews["reviewDateParsed"].min()),
-        "review_date_max": str(reviews["reviewDateParsed"].max()),
+        "review_date_min": str(lamadeleine_reviews["reviewDateParsed"].min()),
+        "review_date_max": str(lamadeleine_reviews["reviewDateParsed"].max()),
     }
     print(json.dumps(summary, indent=2))
 
