@@ -306,6 +306,14 @@ def write_csv(frame: pd.DataFrame, path: str) -> Path:
     return output_path
 
 
+def write_diagnostics(diagnostics: dict[str, Any], path: str) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as handle:
+        json.dump(diagnostics, handle, indent=2)
+    return output_path
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reviews-csv", default="Project Details/googleReview.csv")
@@ -330,17 +338,36 @@ def main() -> None:
     enriched_reviews = build_enriched_reviews(matched_reviews, locations)
     metrics = compute_location_metrics(enriched_reviews)
 
+    unmatched_reviews = enriched_reviews.loc[enriched_reviews["matched_storeID"] == ""].copy()
+
     enriched_path = write_csv(enriched_reviews, args.output_enriched)
     metrics_path = write_csv(metrics, args.output_metrics)
+    unmatched_path = write_csv(unmatched_reviews, args.output_unmatched)
+
+    matched_count = int((matched_reviews["matched_storeID"] != "").sum())
+    total_lm = int(len(lamadeleine_reviews))
+    coverage = (matched_count / total_lm * 100) if total_lm else 0.0
+
+    diagnostics = {
+        "reviews_loaded": int(len(reviews)),
+        "lamadeleine_reviews": total_lm,
+        "locations_loaded": int(len(locations)),
+        "matched_reviews": matched_count,
+        "unmatched_reviews": int(len(unmatched_reviews)),
+        "match_coverage_pct": round(coverage, 2),
+        "match_method_distribution": {
+            str(key): int(value)
+            for key, value in matched_reviews["match_method"].value_counts(dropna=False).to_dict().items()
+        },
+    }
+    diagnostics_path = write_diagnostics(diagnostics, args.output_diagnostics)
 
     summary = {
-        "reviews_loaded": int(len(reviews)),
-        "lamadeleine_reviews": int(len(lamadeleine_reviews)),
-        "locations_loaded": int(len(locations)),
-        "matched_reviews": int((matched_reviews["matched_storeID"] != "").sum()),
-        "unmatched_reviews": int((matched_reviews["matched_storeID"] == "").sum()),
+        **diagnostics,
         "output_enriched": str(enriched_path),
         "output_metrics": str(metrics_path),
+        "output_unmatched": str(unmatched_path),
+        "output_diagnostics": str(diagnostics_path),
     }
     print(json.dumps(summary, indent=2))
 
