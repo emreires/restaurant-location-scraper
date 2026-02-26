@@ -1,6 +1,7 @@
 import unittest
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -10,6 +11,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import extract_locations  # noqa: E402
 import associate_reviews  # noqa: E402
+import generate_slide  # noqa: E402
 
 
 class TestExtraction(unittest.TestCase):
@@ -53,6 +55,12 @@ class TestExtraction(unittest.TestCase):
         ]
         with self.assertRaises(ValueError):
             extract_locations.validate_extracted_records(bad_records)
+
+    def test_parse_args_is_endpoint_only(self):
+        with patch.object(sys, "argv", ["extract_locations.py"]):
+            args = extract_locations.parse_args()
+        self.assertEqual(args.endpoint, extract_locations.DEFAULT_ENDPOINT)
+        self.assertFalse(hasattr(args, "input_json"))
 
 
 class TestAssociation(unittest.TestCase):
@@ -103,6 +111,25 @@ class TestAssociation(unittest.TestCase):
         avg = float(metrics.iloc[0]["avg_rating"])
         self.assertGreaterEqual(avg, 1.0)
         self.assertLessEqual(avg, 5.0)
+
+
+class TestSlideHighlights(unittest.TestCase):
+    def test_select_highlight_points_returns_expected_locations(self):
+        metrics = pd.DataFrame(
+            [
+                {"storeID": "1", "locationName": "A", "city": "CityA", "state": "TX", "review_count": 200, "avg_rating": 4.4},
+                {"storeID": "2", "locationName": "B", "city": "CityB", "state": "TX", "review_count": 200, "avg_rating": 3.8},
+                {"storeID": "3", "locationName": "C", "city": "CityC", "state": "TX", "review_count": 450, "avg_rating": 4.0},
+                {"storeID": "4", "locationName": "D", "city": "CityD", "state": "TX", "review_count": 70, "avg_rating": 4.1},
+            ]
+        )
+
+        highlights = generate_slide.select_highlight_points(metrics)
+
+        self.assertEqual(str(highlights["top_rated"]["storeID"]), "1")
+        self.assertEqual(str(highlights["lowest_rated"]["storeID"]), "2")
+        self.assertEqual(str(highlights["highest_volume"]["storeID"]), "3")
+        self.assertGreaterEqual(int(highlights["threshold"]), 50)
 
 
 if __name__ == "__main__":

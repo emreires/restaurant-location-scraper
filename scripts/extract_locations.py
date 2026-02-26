@@ -114,14 +114,6 @@ def fetch_locations(endpoint: str, per_page: int, timeout: int) -> list[dict[str
     return all_records
 
 
-def load_input_json(input_json_path: str) -> list[dict[str, Any]]:
-    with open(input_json_path, "r", encoding="utf-8") as handle:
-        records = json.load(handle)
-    if not isinstance(records, list):
-        raise ValueError("Input JSON must be a list of location objects.")
-    return records
-
-
 def write_raw_records(records: list[dict[str, Any]], raw_json_path: str) -> Path:
     path = Path(raw_json_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -260,7 +252,6 @@ def export_locations(records: list[dict[str, str]], output_csv: str, output_xlsx
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
-    parser.add_argument("--input-json", default="")
     parser.add_argument("--per-page", type=int, default=100)
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--output-csv", default="outputs/final/restaurant_locations.csv")
@@ -271,13 +262,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-
-    if args.input_json:
-        records = load_input_json(args.input_json)
-        source = f"input_json:{args.input_json}"
-    else:
-        records = fetch_locations(args.endpoint, args.per_page, args.timeout)
-        source = "endpoint"
+    records = fetch_locations(args.endpoint, args.per_page, args.timeout)
 
     raw_path = write_raw_records(records, args.raw_json)
     mapped_records = map_records(records)
@@ -289,7 +274,7 @@ def main() -> None:
     print(
         json.dumps(
             {
-                "source": source,
+                "source": "endpoint",
                 "records_fetched": len(records),
                 "mapped_records": len(mapped_records),
                 "us_records": len(us_records),

@@ -12,15 +12,6 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-# Build/report artifacts
-outputs/**
-!outputs/raw/
-!outputs/final/
-!outputs/plots/
-!outputs/raw/.gitkeep
-!outputs/final/.gitkeep
-!outputs/plots/.gitkeep
-
 # Environment files
 .env
 .env.*
@@ -28,5 +19,6 @@ outputs/**
 # OS/editor noise
 .DS_Store
 Thumbs.db
+~$*.pptx
 .vscode/
 .idea/

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 matplotlib.use("Agg")
@@ -11,6 +12,32 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from pptx import Presentation
 from pptx.util import Inches, Pt
+
+
+HIGHLIGHT_ORDER = ["top_rated", "lowest_rated", "highest_volume"]
+HIGHLIGHT_META = {
+    "top_rated": {
+        "legend": "Top Rated",
+        "short": "Top",
+        "color": "#2E8B57",
+        "marker": "*",
+        "size": 190,
+    },
+    "lowest_rated": {
+        "legend": "Lowest Rated",
+        "short": "Low",
+        "color": "#C0392B",
+        "marker": "X",
+        "size": 130,
+    },
+    "highest_volume": {
+        "legend": "Highest Volume",
+        "short": "Volume",
+        "color": "#E67E22",
+        "marker": "D",
+        "size": 125,
+    },
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,34 +50,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def create_scatter_plot(metrics: pd.DataFrame, plot_path: str) -> Path:
-    output_path = Path(plot_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
+def _normalize_metrics_for_analysis(metrics: pd.DataFrame) -> pd.DataFrame:
     metrics_plot = metrics.copy()
     metrics_plot["review_count"] = pd.to_numeric(metrics_plot["review_count"], errors="coerce")
     metrics_plot["avg_rating"] = pd.to_numeric(metrics_plot["avg_rating"], errors="coerce")
     metrics_plot = metrics_plot.dropna(subset=["review_count", "avg_rating"])
-
-    fig, ax = plt.subplots(figsize=(7.5, 4.2), dpi=160)
-    ax.scatter(
-        metrics_plot["review_count"],
-        metrics_plot["avg_rating"],
-        s=45,
-        alpha=0.75,
-        color="#2468A2",
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    ax.set_title("Location Review Volume vs. Average Rating", fontsize=11)
-    ax.set_xlabel("Review Count", fontsize=10)
-    ax.set_ylabel("Average Rating", fontsize=10)
-    ax.grid(alpha=0.25, linestyle="--", linewidth=0.5)
-
-    fig.tight_layout()
-    fig.savefig(output_path, bbox_inches="tight")
-    plt.close(fig)
-    return output_path
+    return metrics_plot
 
 
 def format_location_label(row: pd.Series) -> str:
@@ -66,26 +71,140 @@ def format_location_label(row: pd.Series) -> str:
     return name
 
 
-def generate_insight_bullets(metrics: pd.DataFrame, enriched: pd.DataFrame) -> list[str]:
-    if metrics.empty:
-        return ["No matched location metrics were available for automated insights."]
+def select_highlight_points(metrics: pd.DataFrame) -> dict[str, Any]:
+    metrics_clean = _normalize_metrics_for_analysis(metrics)
+    if metrics_clean.empty:
+        return {
+            "threshold": 50,
+            "metrics_clean": metrics_clean,
+            "stable_subset": metrics_clean,
+            "top_rated": None,
+            "lowest_rated": None,
+            "highest_volume": None,
+        }
 
-    metrics_copy = metrics.copy()
-    metrics_copy["review_count"] = pd.to_numeric(metrics_copy["review_count"], errors="coerce")
-    metrics_copy["avg_rating"] = pd.to_numeric(metrics_copy["avg_rating"], errors="coerce")
-    metrics_copy = metrics_copy.dropna(subset=["review_count", "avg_rating"])
-
-    if metrics_copy.empty:
-        return ["Metrics file did not contain numeric values for volume/rating analysis."]
-
-    threshold = max(int(metrics_copy["review_count"].median()), 50)
-    stable_subset = metrics_copy.loc[metrics_copy["review_count"] >= threshold]
+    threshold = max(int(metrics_clean["review_count"].median()), 50)
+    stable_subset = metrics_clean.loc[metrics_clean["review_count"] >= threshold]
     if stable_subset.empty:
-        stable_subset = metrics_copy.copy()
+        stable_subset = metrics_clean.copy()
 
     top_rated = stable_subset.sort_values(by=["avg_rating", "review_count"], ascending=[False, False]).iloc[0]
-    bottom_rated = stable_subset.sort_values(by=["avg_rating", "review_count"], ascending=[True, False]).iloc[0]
-    highest_volume = metrics_copy.sort_values(by=["review_count", "avg_rating"], ascending=[False, False]).iloc[0]
+    lowest_rated = stable_subset.sort_values(by=["avg_rating", "review_count"], ascending=[True, False]).iloc[0]
+    highest_volume = metrics_clean.sort_values(by=["review_count", "avg_rating"], ascending=[False, False]).iloc[0]
+
+    return {
+        "threshold": threshold,
+        "metrics_clean": metrics_clean,
+        "stable_subset": stable_subset,
+        "top_rated": top_rated,
+        "lowest_rated": lowest_rated,
+        "highest_volume": highest_volume,
+    }
+
+
+def _build_point_key(row: pd.Series) -> str:
+    store_id = str(row.get("storeID", "")).strip()
+    if store_id:
+        return store_id
+    return format_location_label(row)
+
+
+def create_scatter_plot(metrics: pd.DataFrame, highlights: dict[str, Any], plot_path: str) -> Path:
+    output_path = Path(plot_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    metrics_plot = highlights["metrics_clean"]
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.2), dpi=160)
+    ax.scatter(
+        metrics_plot["review_count"],
+        metrics_plot["avg_rating"],
+        s=45,
+        alpha=0.55,
+        color="#5B8FB9",
+        edgecolor="white",
+        linewidth=0.5,
+    )
+
+    if not metrics_plot.empty and highlights["top_rated"] is not None:
+        unique_points: dict[str, dict[str, Any]] = {}
+        for category in HIGHLIGHT_ORDER:
+            row = highlights[category]
+            key = _build_point_key(row)
+            if key not in unique_points:
+                unique_points[key] = {
+                    "x": float(row["review_count"]),
+                    "y": float(row["avg_rating"]),
+                    "row": row,
+                    "categories": [],
+                }
+            unique_points[key]["categories"].append(category)
+
+            meta = HIGHLIGHT_META[category]
+            ax.scatter(
+                [float(row["review_count"])],
+                [float(row["avg_rating"])],
+                s=meta["size"],
+                marker=meta["marker"],
+                color=meta["color"],
+                edgecolor="black",
+                linewidth=0.6,
+                zorder=4,
+            )
+
+        offsets = [(12, 16), (14, -18), (-125, 16), (-125, -18), (30, 22), (30, -24)]
+        for idx, point in enumerate(unique_points.values()):
+            categories = point["categories"]
+            short_tags = "/".join(HIGHLIGHT_META[c]["short"] for c in categories)
+            label = f"{short_tags}: {format_location_label(point['row'])}"
+            dx, dy = offsets[idx % len(offsets)]
+            ax.annotate(
+                label,
+                xy=(point["x"], point["y"]),
+                xytext=(dx, dy),
+                textcoords="offset points",
+                fontsize=8,
+                bbox={"boxstyle": "round,pad=0.2", "fc": "white", "ec": "#666666", "alpha": 0.9},
+                arrowprops={"arrowstyle": "->", "lw": 0.6, "color": "#555555"},
+                zorder=5,
+            )
+
+        legend_handles = []
+        for category in HIGHLIGHT_ORDER:
+            meta = HIGHLIGHT_META[category]
+            handle = ax.scatter(
+                [],
+                [],
+                s=meta["size"] * 0.55,
+                marker=meta["marker"],
+                color=meta["color"],
+                edgecolor="black",
+                linewidth=0.6,
+                label=meta["legend"],
+            )
+            legend_handles.append(handle)
+        ax.legend(handles=legend_handles, loc="lower right", fontsize=8, framealpha=0.95)
+
+    ax.set_title("Location Review Volume vs. Average Rating", fontsize=11)
+    ax.set_xlabel("Review Count", fontsize=10)
+    ax.set_ylabel("Average Rating", fontsize=10)
+    ax.grid(alpha=0.25, linestyle="--", linewidth=0.5)
+
+    fig.tight_layout()
+    fig.savefig(output_path, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def generate_insight_bullets(highlights: dict[str, Any], enriched: pd.DataFrame) -> list[str]:
+    if highlights["metrics_clean"].empty or highlights["top_rated"] is None:
+        return ["No matched location metrics were available for automated insights."]
+
+    top_rated = highlights["top_rated"]
+    lowest_rated = highlights["lowest_rated"]
+    highest_volume = highlights["highest_volume"]
+    threshold = int(highlights["threshold"])
+    stable_subset = highlights["stable_subset"]
 
     matched_mask = enriched.get("matched_storeID", pd.Series(dtype=str)).fillna("") != ""
     matched_count = int(matched_mask.sum())
@@ -100,8 +219,8 @@ def generate_insight_bullets(metrics: pd.DataFrame, enriched: pd.DataFrame) -> l
             f"with avg rating {float(top_rated['avg_rating']):.2f} across {int(top_rated['review_count'])} reviews."
         ),
         (
-            f"Lowest rated location (>= {threshold} reviews): {format_location_label(bottom_rated)} "
-            f"at {float(bottom_rated['avg_rating']):.2f}; indicates service quality variance."
+            f"Lowest rated location (>= {threshold} reviews): {format_location_label(lowest_rated)} "
+            f"at {float(lowest_rated['avg_rating']):.2f}; indicates service quality variance."
         ),
         (
             f"Highest volume location: {format_location_label(highest_volume)} with "
@@ -153,8 +272,9 @@ def main() -> None:
     metrics = pd.read_csv(args.metrics_csv)
     enriched = pd.read_csv(args.enriched_csv)
 
-    plot_path = create_scatter_plot(metrics, args.plot_path)
-    bullets = generate_insight_bullets(metrics, enriched)
+    highlights = select_highlight_points(metrics)
+    plot_path = create_scatter_plot(metrics, highlights, args.plot_path)
+    bullets = generate_insight_bullets(highlights, enriched)
     pptx_path = build_slide(args.title, str(plot_path), args.output_pptx, bullets)
 
     print(f"Created slide: {pptx_path}")

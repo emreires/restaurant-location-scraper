@@ -12,7 +12,7 @@ The implementation covers all requested tasks:
 ## Repository Layout
 - `scripts/extract_locations.py`: endpoint ingestion, normalization, filtering, dedupe, validation, CSV/XLSX export.
 - `scripts/associate_reviews.py`: review filtering, deterministic matching, enriched outputs, metrics, diagnostics.
-- `scripts/generate_slide.py`: one-slide PPTX generator with scatter plot and automated highlights.
+- `scripts/generate_slide.py`: one-slide PPTX generator with scatter plot, labeled highlights, and automated insights.
 - `docs/xpaths.md`: XPath + regex definitions for `locationName`, `hours`, `phoneNumber`, `distance`, latitude, longitude.
 - `tests/test_pipeline.py`: unit tests for mapping, matching precedence, and metric sanity.
 - `Project Details/googleReview.csv`: provided review dataset.
@@ -29,14 +29,8 @@ pip install -r requirements.txt
 
 ## End-to-End Run
 ### 1) Extract locations
-Preferred (live endpoint):
 ```powershell
 python scripts/extract_locations.py
-```
-
-Fallback if endpoint is blocked from your network (e.g., HTTP 403):
-```powershell
-python scripts/extract_locations.py --input-json "C:\Users\emrei\Downloads\restaurant-locations.json"
 ```
 
 ### 2) Associate reviews to locations
@@ -92,7 +86,10 @@ Validation checks in extraction include:
   - `city`
   - `state`
   - `storeID`
-- If you run with a partial local JSON payload, match coverage will be lower than using the full endpoint dataset.
+- The slide highlights and labels the same three locations used in the narrative:
+  - top rated
+  - lowest rated
+  - highest volume
 
 ## Submission Checklist
 - GitHub repository link with scripts and docs
