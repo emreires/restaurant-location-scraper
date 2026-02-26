@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -201,6 +202,21 @@ def dedupe_locations(records: list[dict[str, str]]) -> list[dict[str, str]]:
     return deduped
 
 
+def export_locations(records: list[dict[str, str]], output_csv: str, output_xlsx: str) -> tuple[Path, Path]:
+    frame = pd.DataFrame(records)
+    frame = frame.reindex(columns=REQUIRED_COLUMNS)
+
+    csv_path = Path(output_csv)
+    xlsx_path = Path(output_xlsx)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    xlsx_path.parent.mkdir(parents=True, exist_ok=True)
+
+    frame.to_csv(csv_path, index=False, encoding="utf-8")
+    frame.to_excel(xlsx_path, index=False)
+
+    return csv_path, xlsx_path
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
@@ -219,6 +235,7 @@ def main() -> None:
     mapped_records = map_records(records)
     us_records = filter_us_locations(mapped_records)
     deduped_records = dedupe_locations(us_records)
+    csv_path, xlsx_path = export_locations(deduped_records, args.output_csv, args.output_xlsx)
 
     print(
         json.dumps(
@@ -228,6 +245,8 @@ def main() -> None:
                 "us_records": len(us_records),
                 "deduped_records": len(deduped_records),
                 "raw_json": str(raw_path),
+                "output_csv": str(csv_path),
+                "output_xlsx": str(xlsx_path),
             },
             indent=2,
         )
