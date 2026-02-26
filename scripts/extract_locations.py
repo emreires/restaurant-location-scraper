@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +15,30 @@ from urllib3.util.retry import Retry
 
 
 DEFAULT_ENDPOINT = "https://lamadeleine.com/wp-json/wp/v2/restaurant-locations"
+REQUIRED_COLUMNS = [
+    "locationName",
+    "postalCode",
+    "streetAddress",
+    "streetAddress2",
+    "fullAddress",
+    "city",
+    "state",
+    "storeID",
+]
+
+STATE_ABBR = {
+    "ALABAMA": "AL", "ALASKA": "AK", "ARIZONA": "AZ", "ARKANSAS": "AR", "CALIFORNIA": "CA",
+    "COLORADO": "CO", "CONNECTICUT": "CT", "DELAWARE": "DE", "FLORIDA": "FL", "GEORGIA": "GA",
+    "HAWAII": "HI", "IDAHO": "ID", "ILLINOIS": "IL", "INDIANA": "IN", "IOWA": "IA",
+    "KANSAS": "KS", "KENTUCKY": "KY", "LOUISIANA": "LA", "MAINE": "ME", "MARYLAND": "MD",
+    "MASSACHUSETTS": "MA", "MICHIGAN": "MI", "MINNESOTA": "MN", "MISSISSIPPI": "MS", "MISSOURI": "MO",
+    "MONTANA": "MT", "NEBRASKA": "NE", "NEVADA": "NV", "NEW HAMPSHIRE": "NH", "NEW JERSEY": "NJ",
+    "NEW MEXICO": "NM", "NEW YORK": "NY", "NORTH CAROLINA": "NC", "NORTH DAKOTA": "ND", "OHIO": "OH",
+    "OKLAHOMA": "OK", "OREGON": "OR", "PENNSYLVANIA": "PA", "RHODE ISLAND": "RI", "SOUTH CAROLINA": "SC",
+    "SOUTH DAKOTA": "SD", "TENNESSEE": "TN", "TEXAS": "TX", "UTAH": "UT", "VERMONT": "VT",
+    "VIRGINIA": "VA", "WASHINGTON": "WA", "WEST VIRGINIA": "WV", "WISCONSIN": "WI", "WYOMING": "WY",
+    "DISTRICT OF COLUMBIA": "DC",
+}
 
 
 def build_session() -> requests.Session:
@@ -75,6 +101,73 @@ def write_raw_records(records: list[dict[str, Any]], raw_json_path: str) -> Path
     return path
 
 
+def clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = html.unescape(str(value))
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def normalize_state(state_value: str) -> str:
+    state = clean_text(state_value).upper()
+    if not state:
+        return ""
+    if len(state) == 2 and state.isalpha():
+        return state
+    return STATE_ABBR.get(state, state)
+
+
+def build_full_address(street_1: str, street_2: str, city: str, state: str, postal_code: str) -> str:
+    line_1 = ", ".join(part for part in [street_1, street_2] if part)
+    line_2_parts = [part for part in [city, state, postal_code] if part]
+    line_2 = ", ".join(line_2_parts[:-1])
+    if line_2_parts:
+        if line_2:
+            line_2 = f"{line_2} {line_2_parts[-1]}"
+        else:
+            line_2 = line_2_parts[-1]
+    return ", ".join(part for part in [line_1, line_2] if part)
+
+
+def map_record_to_required_fields(record: dict[str, Any]) -> dict[str, str]:
+    acf = record.get("acf") if isinstance(record.get("acf"), dict) else {}
+    hero = acf.get("locationHero") if isinstance(acf.get("locationHero"), dict) else {}
+
+    location_name = clean_text(hero.get("storeName"))
+    if not location_name:
+        title_data = record.get("title") if isinstance(record.get("title"), dict) else {}
+        location_name = clean_text(title_data.get("rendered"))
+
+    street_1 = clean_text(hero.get("addressLine1"))
+    street_2 = clean_text(hero.get("addressLine2"))
+    city = clean_text(hero.get("city"))
+    state = normalize_state(clean_text(hero.get("state")))
+    postal_code = clean_text(hero.get("zip"))
+
+    full_address = build_full_address(street_1, street_2, city, state, postal_code)
+
+    store_id = clean_text(hero.get("id"))
+    if not store_id:
+        store_id = clean_text(record.get("id"))
+
+    mapped = {
+        "locationName": location_name,
+        "postalCode": postal_code,
+        "streetAddress": street_1,
+        "streetAddress2": street_2,
+        "fullAddress": full_address,
+        "city": city,
+        "state": state,
+        "storeID": store_id,
+    }
+    return mapped
+
+
+def map_records(records: list[dict[str, Any]]) -> list[dict[str, str]]:
+    return [map_record_to_required_fields(record) for record in records]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
@@ -90,7 +183,17 @@ def main() -> None:
     args = parse_args()
     records = fetch_locations(args.endpoint, args.per_page, args.timeout)
     raw_path = write_raw_records(records, args.raw_json)
-    print(json.dumps({"records_fetched": len(records), "raw_json": str(raw_path)}, indent=2))
+    mapped_records = map_records(records)
+    print(
+        json.dumps(
+            {
+                "records_fetched": len(records),
+                "mapped_records": len(mapped_records),
+                "raw_json": str(raw_path),
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
