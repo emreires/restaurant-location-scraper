@@ -202,6 +202,19 @@ def dedupe_locations(records: list[dict[str, str]]) -> list[dict[str, str]]:
     return deduped
 
 
+def validate_extracted_records(records: list[dict[str, str]]) -> None:
+    if not records:
+        raise ValueError("Validation failed: no location records after filtering/deduplication.")
+
+    for index, record in enumerate(records, start=1):
+        missing_cols = [col for col in REQUIRED_COLUMNS if col not in record]
+        if missing_cols:
+            raise ValueError(f"Validation failed: missing columns {missing_cols} in record {index}.")
+
+        if not clean_text(record.get("locationName")):
+            raise ValueError(f"Validation failed: blank locationName in record {index}.")
+
+
 def export_locations(records: list[dict[str, str]], output_csv: str, output_xlsx: str) -> tuple[Path, Path]:
     frame = pd.DataFrame(records)
     frame = frame.reindex(columns=REQUIRED_COLUMNS)
@@ -235,6 +248,7 @@ def main() -> None:
     mapped_records = map_records(records)
     us_records = filter_us_locations(mapped_records)
     deduped_records = dedupe_locations(us_records)
+    validate_extracted_records(deduped_records)
     csv_path, xlsx_path = export_locations(deduped_records, args.output_csv, args.output_xlsx)
 
     print(
@@ -247,6 +261,7 @@ def main() -> None:
                 "raw_json": str(raw_path),
                 "output_csv": str(csv_path),
                 "output_xlsx": str(xlsx_path),
+                "validation": "passed",
             },
             indent=2,
         )
