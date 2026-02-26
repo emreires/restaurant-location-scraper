@@ -6,6 +6,7 @@ import argparse
 import json
 import re
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -121,9 +122,9 @@ def load_location_lookup(raw_json_path: str) -> pd.DataFrame:
         city = clean_text(hero.get("city"))
         state = clean_text(hero.get("state"))
         postal_code = clean_text(hero.get("zip"))
-        full_address = ", ".join(
-            value for value in [", ".join(v for v in [address_1, address_2] if v), f"{city}, {state} {postal_code}".strip()] if value
-        )
+        line_1 = ", ".join(value for value in [address_1, address_2] if value)
+        line_2 = " ".join(value for value in [", ".join(v for v in [city, state] if v), postal_code] if value)
+        full_address = ", ".join(value for value in [line_1, line_2] if value)
 
         output.append(
             {
@@ -213,6 +214,47 @@ def match_reviews(
     return output
 
 
+def build_enriched_reviews(matched_reviews: pd.DataFrame, locations: pd.DataFrame) -> pd.DataFrame:
+    location_ref = locations.copy().rename(
+        columns={
+            "storeID": "matched_storeID",
+            "locationName": "matched_locationName",
+            "postalCode": "matched_postalCode",
+            "streetAddress": "matched_streetAddress",
+            "streetAddress2": "matched_streetAddress2",
+            "fullAddress": "matched_fullAddress",
+            "city": "matched_city",
+            "state": "matched_state",
+        }
+    )
+
+    enriched = matched_reviews.merge(
+        location_ref[
+            [
+                "matched_storeID",
+                "matched_locationName",
+                "matched_postalCode",
+                "matched_streetAddress",
+                "matched_streetAddress2",
+                "matched_fullAddress",
+                "matched_city",
+                "matched_state",
+            ]
+        ],
+        on="matched_storeID",
+        how="left",
+    )
+
+    return enriched
+
+
+def write_csv(frame: pd.DataFrame, path: str) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(output_path, index=False, encoding="utf-8")
+    return output_path
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reviews-csv", default="Project Details/googleReview.csv")
@@ -234,6 +276,8 @@ def main() -> None:
 
     slug_index, address_index, phone_index, _enriched_locations = build_match_indexes(locations, lookup)
     matched_reviews = match_reviews(lamadeleine_reviews, slug_index, address_index, phone_index)
+    enriched_reviews = build_enriched_reviews(matched_reviews, locations)
+    output_path = write_csv(enriched_reviews, args.output_enriched)
 
     summary = {
         "reviews_loaded": int(len(reviews)),
@@ -241,6 +285,7 @@ def main() -> None:
         "locations_loaded": int(len(locations)),
         "matched_reviews": int((matched_reviews["matched_storeID"] != "").sum()),
         "unmatched_reviews": int((matched_reviews["matched_storeID"] == "").sum()),
+        "output_enriched": str(output_path),
     }
     print(json.dumps(summary, indent=2))
 
