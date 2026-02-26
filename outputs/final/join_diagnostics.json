@@ -1,0 +1,11 @@
+{
+  "reviews_loaded": 49430,
+  "lamadeleine_reviews": 32232,
+  "locations_loaded": 86,
+  "matched_reviews": 32232,
+  "unmatched_reviews": 0,
+  "match_coverage_pct": 100.0,
+  "match_method_distribution": {
+    "website_slug": 32232
+  }
+}
