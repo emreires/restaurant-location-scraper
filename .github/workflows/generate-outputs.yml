@@ -1,0 +1,55 @@
+name: Generate Assessment Outputs
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-outputs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Clean previous generated outputs
+        run: |
+          find outputs -type f ! -name '.gitkeep' -delete
+
+      - name: Extract locations from endpoint
+        run: |
+          python scripts/extract_locations.py
+
+      - name: Associate reviews with locations
+        run: |
+          python scripts/associate_reviews.py \
+            --reviews-csv "Project Details/googleReview.csv" \
+            --locations-csv "outputs/final/restaurant_locations.csv" \
+            --raw-json "outputs/raw/restaurant_locations_raw.json"
+
+      - name: Generate insight slide
+        run: |
+          python scripts/generate_slide.py \
+            --metrics-csv "outputs/final/location_metrics.csv" \
+            --enriched-csv "outputs/final/reviews_enriched.csv" \
+            --output-pptx "outputs/final/assessment_insights.pptx"
+
+      - name: Upload outputs as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: assessment-outputs-${{ github.run_id }}
+          path: |
+            outputs/final/**
+            outputs/raw/**
+            outputs/plots/**
+          if-no-files-found: error
