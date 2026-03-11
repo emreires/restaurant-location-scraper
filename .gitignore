@@ -22,3 +22,6 @@ Thumbs.db
 ~$*.pptx
 .vscode/
 .idea/
+
+# Sensitive assessment document
+Project Details/WDF-Specialist, Web Data Technical Assessment.pdf
